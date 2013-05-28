@@ -12,13 +12,12 @@ require "pp"
 class MovieLenser
   include Mongo
 
-  def initialize
+  attr_reader :db
+
+  def initialize(file_path)
     @client = MongoClient.new('localhost', 27017)
     @db     = @client['movielensdb']
     @ratings = {}
-  end
-
-  def read_from_file(file_path)
     fh = File.open(file_path)
     raise "Cannot open file '#{file_path}' for reading" unless fh
     fh.each do |line|
@@ -28,7 +27,14 @@ class MovieLenser
       @ratings[fields[0]][fields[1]] = fields[2]
       #break if @total_count > 1000
     end
-    puts @ratings.keys.size
+    puts "-- Read ratings for #{@ratings.keys.size} users"
+  end
+
+  def clean
+    @db["users"].drop
+    @db["movies"].drop
+    @db["ratings"].drop
+    #puts @db.collection_names
   end
 
   def iter_and_save
@@ -45,6 +51,17 @@ class MovieLenser
         rating_sum = 0
         rating_count = 0
         rating.keys.sort_by(&:to_i).each do |movie_id|
+          # #### #
+          # Save the movie record
+          # #### #
+          @db["movies"].update(
+            {"_id" => movie_id},
+            {"$push" => {"users" => user_id}},
+            {:upsert => true}
+          )
+          # #### #
+          # Save the ratings
+          # #### #
           rating_count += 1
           rating_sum += rating[movie_id].to_i
           rating_rec = {}
@@ -52,6 +69,9 @@ class MovieLenser
           rating_rec[:movie_id] = movie_id 
           rating_rec[:rating] = rating[movie_id]
           @db["ratings"].insert(rating_rec)
+          # #### #
+          # Save the user record
+          # #### #
           user_rec[:ratings] << {
             :movie_id => movie_id,
             :rating => rating[movie_id]
@@ -62,6 +82,7 @@ class MovieLenser
           user_rec[:avg_rating] = (rating_sum.to_f/rating_count.to_f)
         end
         @db["users"].insert(user_rec)
+        #puts "#{Time.now} User #{user_id} done, #movies = #{rating_count}"
       end
     end
     puts "Count : #{@db["ratings"].count}"
@@ -75,8 +96,8 @@ end
 raise "Missing file name\nUsage : #{$0} <file name>" unless ARGV[0]
 
 starting_ts = Time.now
-movie_lenser = MovieLenser.new
-movie_lenser.read_from_file(ARGV[0])
+movie_lenser = MovieLenser.new(ARGV[0])
+movie_lenser.clean
 movie_lenser.iter_and_save
 finished_ts = Time.now
 puts "Elapsed Time : #{finished_ts - starting_ts} seconds"
